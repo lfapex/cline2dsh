@@ -1,0 +1,16 @@
+# cline2dsh DSH plugin — bundle patch: insert the plugin row (deployment-global).
+#
+# Defaults need no edits: the adapter reads the Cline desktop app's locally
+# stored OAuth credentials on every request and only exposes free models.
+# Override any option via the config object below (see src/config.ts), e.g.:
+#
+# - insert:
+#     - id: cline2dsh
+#       name: 'cline2dsh'
+#       config:
+#         freeOnly: true
+#         refreshSeconds: 300
+- insert:
+    - id: cline2dsh
+      name: 'cline2dsh'
+      config: {}
