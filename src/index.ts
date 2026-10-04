@@ -31,6 +31,9 @@ export interface PluginContext {
 
 export const name = 'cline2dsh'
 
+/** Bumped per release; logged at registration so the live code is identifiable. */
+export const PLUGIN_VERSION = '0.3.1'
+
 /**
  * The plugin's settings schema. DSH reads this export to decide which fields
  * are editable under this entry's Loader id, so it must be named `Config`.
@@ -74,7 +77,7 @@ export function apply(ctx: PluginContext, config: Cline2dshConfig = {}): void {
   // even while the catalog is still warming up. A throw anywhere below must
   // never cost the deployment its provider.
   ctx.llm.registerAdapter([PROVIDER_ID], adapter)
-  logger.info(`cline2dsh: adapter registered for "${PROVIDER_ID}" (catalog warms up in background)`)
+  logger.info(`cline2dsh v${PLUGIN_VERSION}: adapter registered for "${PROVIDER_ID}" (catalog warms up in background)`)
 
   // Startup credential probe: surface a missing/expired Cline session as a
   // clear warning now instead of a per-request failure later.

@@ -373,8 +373,10 @@ interface PluginContext {
   effect?(fn: () => () => void): unknown;
 }
 declare const name = "cline2dsh";
+/** Bumped per release; logged at registration so the live code is identifiable. */
+declare const PLUGIN_VERSION = "0.3.1";
 /** Only `llm` gates this fiber: the adapter needs nothing else. */
 declare const inject: readonly ["llm"];
 declare function apply(ctx: PluginContext, config?: Cline2dshConfig): void;
 //#endregion
-export { type Cline2dshConfig, ClineAdapter, Config, ModelCatalog, PROVIDER_ID, PluginContext, apply, defaultCachePath, defaultDataDir, getValidAccessToken, inject, name, readClineCredentials, readClineCredentialsCached, refreshClineToken, resolveConfig };
+export { type Cline2dshConfig, ClineAdapter, Config, ModelCatalog, PLUGIN_VERSION, PROVIDER_ID, PluginContext, apply, defaultCachePath, defaultDataDir, getValidAccessToken, inject, name, readClineCredentials, readClineCredentialsCached, refreshClineToken, resolveConfig };
