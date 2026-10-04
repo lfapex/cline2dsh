@@ -1,6 +1,6 @@
 {
   "name": "cline2dsh",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Cline free models for DeepSeek Harness (DSH): native dsh-llm adapter streaming from api.cline.bot with the locally logged-in Cline account, free models only.",
   "type": "module",
   "main": "lib/index.js",

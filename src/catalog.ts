@@ -53,12 +53,25 @@ interface CacheFile {
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
+/**
+ * Display-name badge pinned to the Cline free fleet. Some picker surfaces
+ * re-sort options alphabetically and ignore adapter order; `!` sorts before
+ * every letter under both code-point and locale collation (tested), so the
+ * badge pins the fleet to the top in either world. Display-only — the wire
+ * model id is untouched.
+ */
+export const FLEET_BADGE = '! '
+
+export function fleetDisplayName(raw: string | undefined, id: string): string {
+  return FLEET_BADGE + prettifyBucketName(raw, id)
+}
+
 /** Verified free roster (free bucket ∪ /models `:free`, 2026-10-04). */
 export const STATIC_FREE_MODELS: CatalogEntry[] = [
-  { id: 'cline-free/deepseek-v4.1-flash', name: 'Deepseek-v4.1-Flash', source: 'cline' },
-  { id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha', source: 'cline' },
-  { id: 'cline-free/mimo-v2.6-flash', name: 'Mimo V2.6 Flash', source: 'cline' },
-  { id: 'cline-free/muse-spark-1.3-contributor', name: 'Muse Spark 1.3 Contributor', source: 'cline' },
+  { id: 'cline-free/deepseek-v4.1-flash', name: FLEET_BADGE + 'Deepseek-v4.1-Flash', source: 'cline' },
+  { id: 'stealth/space-bunny-alpha', name: FLEET_BADGE + 'Space Bunny Alpha', source: 'cline' },
+  { id: 'cline-free/mimo-v2.6-flash', name: FLEET_BADGE + 'Mimo V2.6 Flash', source: 'cline' },
+  { id: 'cline-free/muse-spark-1.3-contributor', name: FLEET_BADGE + 'Muse Spark 1.3 Contributor', source: 'cline' },
   { id: 'apodex/apodex-1.1-mini:free', source: 'openrouter' },
   { id: 'inclusionai/ling-3.0-flash-sante:free', source: 'openrouter' },
   { id: 'qwen/qwen3.8-27b:free', source: 'openrouter' },
@@ -271,7 +284,7 @@ export class ModelCatalog {
         n += 1
         if (tag === 'clinePass' && !this.#includeClinePass) continue
         if (entries.has(row.id)) continue
-        entries.set(row.id, { id: row.id, name: prettifyBucketName(row.name, row.id), source: 'cline' })
+        entries.set(row.id, { id: row.id, name: fleetDisplayName(row.name, row.id), source: 'cline' })
       }
       return n
     }

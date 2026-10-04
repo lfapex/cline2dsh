@@ -32,7 +32,7 @@ export interface PluginContext {
 export const name = 'cline2dsh'
 
 /** Bumped per release; logged at registration so the live code is identifiable. */
-export const PLUGIN_VERSION = '0.3.1'
+export const PLUGIN_VERSION = '0.3.2'
 
 /**
  * The plugin's settings schema. DSH reads this export to decide which fields

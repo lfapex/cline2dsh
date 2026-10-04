@@ -374,7 +374,7 @@ interface PluginContext {
 }
 declare const name = "cline2dsh";
 /** Bumped per release; logged at registration so the live code is identifiable. */
-declare const PLUGIN_VERSION = "0.3.1";
+declare const PLUGIN_VERSION = "0.3.2";
 /** Only `llm` gates this fiber: the adapter needs nothing else. */
 declare const inject: readonly ["llm"];
 declare function apply(ctx: PluginContext, config?: Cline2dshConfig): void;
