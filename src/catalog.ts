@@ -29,6 +29,8 @@ export interface CatalogEntry {
   id: string
   /** Human display name from the Cline free bucket when available. */
   name?: string
+  /** Which free family an entry came from; 'cline' sorts first. */
+  source?: 'cline' | 'openrouter'
   contextWindow?: number
   maxOutput?: number
   input?: string[]
@@ -53,27 +55,27 @@ const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 /** Verified free roster (free bucket ∪ /models `:free`, 2026-10-04). */
 export const STATIC_FREE_MODELS: CatalogEntry[] = [
-  { id: 'cline-free/deepseek-v4.1-flash', name: 'Deepseek-v4.1-Flash' },
-  { id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha' },
-  { id: 'cline-free/mimo-v2.6-flash', name: 'Mimo V2.6 Flash' },
-  { id: 'cline-free/muse-spark-1.3-contributor', name: 'Muse Spark 1.3 Contributor' },
-  { id: 'apodex/apodex-1.1-mini:free' },
-  { id: 'inclusionai/ling-3.0-flash-sante:free' },
-  { id: 'qwen/qwen3.8-27b:free' },
-  { id: 'dots-studio/dots-3-note-preview:free' },
-  { id: 'liquid/lfm-2.5-2.6b:free' },
-  { id: 'nvidia/nemotron-3.5-lightning:free' },
-  { id: 'thinkingmachines/inkling-small:free' },
-  { id: 'poolside/laguna-s-2.1:free' },
-  { id: 'thinkingmachines/inkling:free' },
-  { id: 'poolside/laguna-xs-2.1:free' },
-  { id: 'cohere/north-mini-code:free' },
-  { id: 'nvidia/nemotron-3.5-content-safety:free' },
-  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
-  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free' },
-  { id: 'google/gemma-4-26b-a4b-it:free' },
-  { id: 'google/gemma-4-31b-it:free' },
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free' },
+  { id: 'cline-free/deepseek-v4.1-flash', name: 'Deepseek-v4.1-Flash', source: 'cline' },
+  { id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha', source: 'cline' },
+  { id: 'cline-free/mimo-v2.6-flash', name: 'Mimo V2.6 Flash', source: 'cline' },
+  { id: 'cline-free/muse-spark-1.3-contributor', name: 'Muse Spark 1.3 Contributor', source: 'cline' },
+  { id: 'apodex/apodex-1.1-mini:free', source: 'openrouter' },
+  { id: 'inclusionai/ling-3.0-flash-sante:free', source: 'openrouter' },
+  { id: 'qwen/qwen3.8-27b:free', source: 'openrouter' },
+  { id: 'dots-studio/dots-3-note-preview:free', source: 'openrouter' },
+  { id: 'liquid/lfm-2.5-2.6b:free', source: 'openrouter' },
+  { id: 'nvidia/nemotron-3.5-lightning:free', source: 'openrouter' },
+  { id: 'thinkingmachines/inkling-small:free', source: 'openrouter' },
+  { id: 'poolside/laguna-s-2.1:free', source: 'openrouter' },
+  { id: 'thinkingmachines/inkling:free', source: 'openrouter' },
+  { id: 'poolside/laguna-xs-2.1:free', source: 'openrouter' },
+  { id: 'cohere/north-mini-code:free', source: 'openrouter' },
+  { id: 'nvidia/nemotron-3.5-content-safety:free', source: 'openrouter' },
+  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', source: 'openrouter' },
+  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', source: 'openrouter' },
+  { id: 'google/gemma-4-26b-a4b-it:free', source: 'openrouter' },
+  { id: 'google/gemma-4-31b-it:free', source: 'openrouter' },
+  { id: 'nvidia/nemotron-3-super-120b-a12b:free', source: 'openrouter' },
 ]
 
 export function isFreeModel(id: string): boolean {
@@ -82,7 +84,7 @@ export function isFreeModel(id: string): boolean {
 
 /** "cline-pass/glm-5.3" -> "Glm 5.3"; bucket names are often raw ids. */
 export function prettifyBucketName(raw: string | undefined, id: string): string {
-  if (typeof raw === 'string' && raw.length > 0 && !raw.includes('/')) return raw
+  if (typeof raw === 'string' && raw.length > 0 && !raw.includes('/') && !/^[a-z0-9.-]+$/.test(raw)) return raw
   const short = (raw ?? id).split('/').at(-1) ?? id
   return short
     .replace(/[:].*$/, '')
@@ -117,6 +119,7 @@ export class ModelCatalog {
   readonly #onRefresh?: (snapshot: CatalogSnapshot, lastError: string) => void
 
   #entries: Map<string, CatalogEntry> = new Map()
+  #ordered: string[] = []
   #status: CatalogSnapshot['status'] = 'pending'
   #fetchedAt?: string
   #counts = { freeBucket: 0, clinePass: 0, openrouterFree: 0 }
@@ -144,8 +147,19 @@ export class ModelCatalog {
   }
 
   list(): string[] {
-    if (this.#entries.size > 0) return [...this.#entries.keys()]
+    if (this.#entries.size > 0) return [...this.#ordered]
     return STATIC_FREE_MODELS.map((entry) => entry.id)
+  }
+
+  /** Picker order: Cline's own free fleet first, then by display name. */
+  #compare(a: CatalogEntry, b: CatalogEntry): number {
+    const rank = (entry: CatalogEntry) => (entry.source === 'cline' ? 0 : 1)
+    const byRank = rank(a) - rank(b)
+    if (byRank !== 0) return byRank
+    const an = (this.display(a.id) ?? a.id).toLowerCase()
+    const bn = (this.display(b.id) ?? b.id).toLowerCase()
+    if (an !== bn) return an < bn ? -1 : 1
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
   }
 
   display(model: string): string {
@@ -257,7 +271,7 @@ export class ModelCatalog {
         n += 1
         if (tag === 'clinePass' && !this.#includeClinePass) continue
         if (entries.has(row.id)) continue
-        entries.set(row.id, { id: row.id, name: prettifyBucketName(row.name, row.id) })
+        entries.set(row.id, { id: row.id, name: prettifyBucketName(row.name, row.id), source: 'cline' })
       }
       return n
     }
@@ -290,7 +304,7 @@ export class ModelCatalog {
     this.#counts.openrouterFree = ids.length
     if (ids.length === 0) return []
     const enriched = await this.#enrich(ids).catch(() => undefined)
-    return ids.map((id) => enriched?.get(id) ?? { id })
+    return ids.map((id) => ({ ...(enriched?.get(id) ?? { id }), source: 'openrouter' as const }))
   }
 
   /**
@@ -339,6 +353,7 @@ export class ModelCatalog {
     }
     if (next.size === 0) return
     this.#entries = next
+    this.#ordered = [...next.values()].sort((a, b) => this.#compare(a, b)).map((entry) => entry.id)
     this.#status = status
     this.#fetchedAt = fetchedAt ?? new Date().toISOString()
   }
