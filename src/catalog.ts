@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { clineRequestHeaders, readClineCredentialsCached } from './credentials.ts'
+import { clineRequestHeaders, getValidAccessToken } from './credentials.ts'
 
 /**
  * Free-model catalog for the Cline lane.
@@ -250,14 +250,14 @@ export class ModelCatalog {
 
   /** Cline's own free fleet (the `free` bucket; `clinePass` is opt-in). */
   async #fetchFreeBuckets(): Promise<Map<string, CatalogEntry>> {
-    const creds = await readClineCredentialsCached(this.#credentialsPath || undefined)
+    const { accessToken, accountId } = await getValidAccessToken({ baseURL: this.#baseURL, credentialsPath: this.#credentialsPath })
     const url = `${this.#baseURL}/ai/cline/recommended-models`
     const response = await this.#fetchImpl(url, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
-        Authorization: `Bearer ${creds.accessToken}`,
-        ...clineRequestHeaders(creds),
+        Authorization: `Bearer ${accessToken}`,
+        ...clineRequestHeaders(accountId),
       },
       signal: AbortSignal.timeout(15_000),
     })
@@ -282,13 +282,13 @@ export class ModelCatalog {
 
   /** OpenRouter-routed free models: `:free` suffix rows of GET /models. */
   async #fetchOpenRouterFree(): Promise<CatalogEntry[]> {
-    const creds = await readClineCredentialsCached(this.#credentialsPath || undefined)
+    const { accessToken, accountId } = await getValidAccessToken({ baseURL: this.#baseURL, credentialsPath: this.#credentialsPath })
     const url = `${this.#baseURL}/models`
     const response = await this.#fetchImpl(url, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${creds.accessToken}`,
-        ...clineRequestHeaders(creds),
+        Authorization: `Bearer ${accessToken}`,
+        ...clineRequestHeaders(accountId),
       },
       signal: AbortSignal.timeout(15_000),
     })

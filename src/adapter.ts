@@ -2,7 +2,7 @@ import { createProvider, type Api, type Model } from '@earendil-works/pi-ai'
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions'
 
 import type { CatalogEntry, ModelCatalog } from './catalog.ts'
-import { clineRequestHeaders, readClineCredentialsCached } from './credentials.ts'
+import { clineRequestHeaders, getValidAccessToken, readClineCredentialsCached } from './credentials.ts'
 import { toStreamChunks, type HarnessChunk, type PiDoneMessage, type PiEvent } from './events.ts'
 import { deriveRequestIDs } from './ids.ts'
 import { toPiContext, type HarnessGenerateOptions, type PiContext } from './messages.ts'
@@ -196,11 +196,11 @@ export class ClineAdapter {
       firstMessageText: firstUser ? flattenText(firstUser.content as Array<{ type: string; text?: string }>) : undefined,
     })
     const model = toPiModel(options.model, this.#baseURL, this.#entryFor(options.model))
-    const creds = await readClineCredentialsCached(this.#credentialsPath || undefined)
-    const headers = clineRequestHeaders(creds)
+    const { accessToken, accountId } = await getValidAccessToken({ baseURL: this.#baseURL, credentialsPath: this.#credentialsPath })
+    const headers = clineRequestHeaders(accountId)
 
     const events = this.#provider.streamSimple(model, context as unknown as never, {
-      apiKey: creds.accessToken,
+      apiKey: accessToken,
       sessionId: ids.session,
       headers,
       signal: options.signal,

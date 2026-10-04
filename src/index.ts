@@ -102,4 +102,4 @@ export function apply(ctx: PluginContext, config: Cline2dshConfig = {}): void {
 export { ClineAdapter, PROVIDER_ID } from './adapter.ts'
 export { defaultCachePath, defaultDataDir, ModelCatalog } from './catalog.ts'
 export { resolveConfig, type Cline2dshConfig } from './config.ts'
-export { readClineCredentials, readClineCredentialsCached } from './credentials.ts'
+export { getValidAccessToken, readClineCredentials, readClineCredentialsCached, refreshClineToken } from './credentials.ts'

@@ -302,6 +302,8 @@ declare class ClineAdapter {
 interface ClineCredentials {
   /** Verbatim persisted access token (`workos:...` JWT); sent as Bearer. */
   accessToken: string;
+  /** Reusable refresh token; the backend does NOT rotate it (verified). */
+  refreshToken?: string;
   /** Cline account id (`usr-...`); sent as the `clineUserId` header. */
   accountId: string;
   /** Epoch ms the access token expires at, when the file declares one. */
@@ -313,6 +315,33 @@ interface ClineCredentials {
  */
 declare function readClineCredentials(path?: string): Promise<ClineCredentials>;
 declare function readClineCredentialsCached(path?: string): Promise<ClineCredentials>;
+/**
+ * Token refresh against the Cline backend (`POST /api/v1/auth/refresh`,
+ * body `{refreshToken, grantType: "refresh_token"}` — reverse-engineered
+ * from the Cline extension, live-verified 2026-10-04). The backend does NOT
+ * rotate the refresh token (the response echoes the same one the desktop
+ * app keeps reusing), so refreshing here never kicks the desktop app out
+ * of its session. The minted token lives only in this process's memory —
+ * providers.json stays the desktop app's property.
+ */
+declare function refreshClineToken(baseURL: string, creds: ClineCredentials): Promise<ClineCredentials>;
+interface ValidToken {
+  accessToken: string;
+  accountId: string;
+  /** True when this call minted a fresh token via the refresh endpoint. */
+  refreshed: boolean;
+}
+/**
+ * Access token for one API call, refreshing proactively when the current
+ * token is at (or past) its expiry. Reads the desktop app's file for the
+ * base state; refreshed tokens stay in memory only. When refresh fails but
+ * a token exists, the stale token is returned — the API call it arms may
+ * still succeed (clock skew) or surface a precise 401 upstream.
+ */
+declare function getValidAccessToken(options: {
+  baseURL: string;
+  credentialsPath: string;
+}): Promise<ValidToken>;
 //#endregion
 //#region src/index.d.ts
 /**
@@ -348,4 +377,4 @@ declare const name = "cline2dsh";
 declare const inject: readonly ["llm"];
 declare function apply(ctx: PluginContext, config?: Cline2dshConfig): void;
 //#endregion
-export { type Cline2dshConfig, ClineAdapter, Config, ModelCatalog, PROVIDER_ID, PluginContext, apply, defaultCachePath, defaultDataDir, inject, name, readClineCredentials, readClineCredentialsCached, resolveConfig };
+export { type Cline2dshConfig, ClineAdapter, Config, ModelCatalog, PROVIDER_ID, PluginContext, apply, defaultCachePath, defaultDataDir, getValidAccessToken, inject, name, readClineCredentials, readClineCredentialsCached, refreshClineToken, resolveConfig };

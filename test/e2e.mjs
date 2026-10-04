@@ -1,6 +1,6 @@
-// Live e2e smoke test: credentials -> catalog (free bucket ∪ :free) -> one
-// tiny cline-free completion. Run: node test/e2e.mjs
-import { ClineAdapter, ModelCatalog, defaultCachePath, defaultDataDir } from '../lib/index.js'
+// Live e2e smoke test: credentials -> token refresh -> catalog (free bucket
+// ∪ :free) -> one tiny cline-free completion. Run: node test/e2e.mjs
+import { ClineAdapter, ModelCatalog, defaultCachePath, defaultDataDir, refreshClineToken } from '../lib/index.js'
 import { readClineCredentialsCached } from '../lib/index.js'
 
 const baseURL = 'https://api.cline.bot/api/v1'
@@ -8,6 +8,9 @@ const credentialsPath = process.env.CLINE_CREDS || ''
 
 const creds = await readClineCredentialsCached(credentialsPath || undefined)
 console.log('credentials: ok, account =', creds.accountId.slice(0, 12) + '…')
+
+const fresh = await refreshClineToken(baseURL, creds)
+console.log('refresh: ok, new token expires', fresh.expiresAt ? new Date(fresh.expiresAt).toISOString() : '(no expiry)')
 
 const catalog = new ModelCatalog({
   baseURL,

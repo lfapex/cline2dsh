@@ -16,6 +16,8 @@ import { join } from 'node:path'
 export interface ClineCredentials {
   /** Verbatim persisted access token (`workos:...` JWT); sent as Bearer. */
   accessToken: string
+  /** Reusable refresh token; the backend does NOT rotate it (verified). */
+  refreshToken?: string
   /** Cline account id (`usr-...`); sent as the `clineUserId` header. */
   accountId: string
   /** Epoch ms the access token expires at, when the file declares one. */
@@ -77,6 +79,7 @@ export async function readClineCredentials(path: string = defaultCredentialsPath
     )
   }
   const accessToken = (authBlock as { accessToken?: unknown }).accessToken
+  const refreshToken = (authBlock as { refreshToken?: unknown }).refreshToken
   const accountId =
     (authBlock as { accountId?: unknown }).accountId ??
     (isRecord((authBlock as { metadata?: unknown }).metadata)
@@ -90,7 +93,12 @@ export async function readClineCredentials(path: string = defaultCredentialsPath
   }
   const expiresAtRaw = (authBlock as { expiresAt?: unknown }).expiresAt
   const expiresAt = typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw) ? expiresAtRaw : undefined
-  return { accessToken, accountId, expiresAt }
+  return {
+    accessToken,
+    accountId,
+    expiresAt,
+    ...(typeof refreshToken === 'string' && refreshToken.length > 0 ? { refreshToken } : {}),
+  }
 }
 
 /**
@@ -105,9 +113,9 @@ export async function readClineCredentials(path: string = defaultCredentialsPath
 const CLINE_CLIENT_TYPE = process.env.CLINE_CLIENT_TYPE?.trim() || 'cline-sdk'
 const CLINE_CLIENT_VERSION = process.env.CLINE_CLIENT_VERSION?.trim() || '4.1.22'
 
-export function clineRequestHeaders(creds: ClineCredentials): Record<string, string> {
+export function clineRequestHeaders(accountId: string): Record<string, string> {
   return {
-    clineUserId: creds.accountId,
+    clineUserId: accountId,
     'HTTP-Referer': 'https://cline.bot',
     'X-Title': 'Cline',
     'X-IS-MULTIROOT': 'false',
@@ -145,4 +153,126 @@ export async function readClineCredentialsCached(path: string = defaultCredentia
     cache = undefined
   }
   return creds
+}
+
+/**
+ * Token refresh against the Cline backend (`POST /api/v1/auth/refresh`,
+ * body `{refreshToken, grantType: "refresh_token"}` — reverse-engineered
+ * from the Cline extension, live-verified 2026-10-04). The backend does NOT
+ * rotate the refresh token (the response echoes the same one the desktop
+ * app keeps reusing), so refreshing here never kicks the desktop app out
+ * of its session. The minted token lives only in this process's memory —
+ * providers.json stays the desktop app's property.
+ */
+export async function refreshClineToken(baseURL: string, creds: ClineCredentials): Promise<ClineCredentials> {
+  if (!creds.refreshToken) {
+    throw new CredentialsError(
+      'cline2dsh: no refreshToken in providers.json; open the Cline desktop app and log in again.',
+      'CLINE_NO_REFRESH_TOKEN',
+    )
+  }
+  const url = `${baseURL.replace(/\/+$/, '')}/auth/refresh`
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...clineRequestHeaders(creds.accountId),
+      },
+      body: JSON.stringify({ refreshToken: creds.refreshToken, grantType: 'refresh_token' }),
+      signal: AbortSignal.timeout(20_000),
+    })
+  } catch (err) {
+    throw new CredentialsError(`cline2dsh: token refresh request failed: ${(err as Error).message}`, 'CLINE_REFRESH_TRANSPORT')
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    if (response.status === 401 || response.status === 403) {
+      throw new CredentialsError(
+        'cline2dsh: token refresh rejected (401/403) — the Cline session was revoked. Open the Cline desktop app and log in again.',
+        'CLINE_REFRESH_REJECTED',
+      )
+    }
+    throw new CredentialsError(`cline2dsh: token refresh -> ${response.status} ${text.slice(0, 160)}`, 'CLINE_REFRESH_FAILED')
+  }
+  const body = (await response.json()) as Record<string, unknown>
+  const inner = (isRecord(body.data) ? body.data : body) as {
+    accessToken?: unknown
+    expiresAt?: unknown
+    refreshToken?: unknown
+  }
+  const accessToken = typeof inner.accessToken === 'string' ? inner.accessToken : undefined
+  if (!accessToken) {
+    throw new CredentialsError('cline2dsh: token refresh response had no accessToken.', 'CLINE_REFRESH_FAILED')
+  }
+  const rawExpiry = inner.expiresAt
+  let expiresAt: number | undefined
+  if (typeof rawExpiry === 'number' && Number.isFinite(rawExpiry)) {
+    // epoch seconds vs ms: the backend answers in ISO or ms; a seconds-scale
+    // number (< 10^12) is converted so both spellings work.
+    expiresAt = rawExpiry < 1e12 ? rawExpiry * 1000 : rawExpiry
+  } else if (typeof rawExpiry === 'string' && rawExpiry.length > 0) {
+    const parsed = Date.parse(rawExpiry)
+    if (Number.isFinite(parsed)) expiresAt = parsed
+  }
+  return { ...creds, accessToken, expiresAt }
+}
+
+export interface ValidToken {
+  accessToken: string
+  accountId: string
+  /** True when this call minted a fresh token via the refresh endpoint. */
+  refreshed: boolean
+}
+
+const EXPIRY_MARGIN_MS = 60_000
+/** In-memory refreshed tokens, keyed by resolved credentials path. */
+const liveTokens = new Map<string, ClineCredentials>()
+/** Single-flight refresh per path; concurrent callers share one request. */
+const pendingRefreshes = new Map<string, Promise<ClineCredentials>>()
+
+/**
+ * Access token for one API call, refreshing proactively when the current
+ * token is at (or past) its expiry. Reads the desktop app's file for the
+ * base state; refreshed tokens stay in memory only. When refresh fails but
+ * a token exists, the stale token is returned — the API call it arms may
+ * still succeed (clock skew) or surface a precise 401 upstream.
+ */
+export async function getValidAccessToken(options: { baseURL: string; credentialsPath: string }): Promise<ValidToken> {
+  const key = options.credentialsPath || defaultCredentialsPath()
+  const creds = await readClineCredentialsCached(key)
+  const live = liveTokens.get(key)
+  const token = live?.accessToken ?? creds.accessToken
+  const expiresAt = live?.expiresAt ?? creds.expiresAt
+
+  if (token && (expiresAt === undefined || Date.now() < expiresAt - EXPIRY_MARGIN_MS)) {
+    return { accessToken: token, accountId: creds.accountId, refreshed: false }
+  }
+
+  let refreshedCreds: ClineCredentials | undefined
+  if (creds.refreshToken) {
+    let pending = pendingRefreshes.get(key)
+    if (!pending) {
+      pending = refreshClineToken(options.baseURL, creds).finally(() => {
+        pendingRefreshes.delete(key)
+      })
+      pendingRefreshes.set(key, pending)
+    }
+    try {
+      refreshedCreds = await pending
+      liveTokens.set(key, refreshedCreds)
+    } catch {
+      // fall through to the stale token, if any
+    }
+  }
+
+  if (refreshedCreds) {
+    return { accessToken: refreshedCreds.accessToken, accountId: refreshedCreds.accountId, refreshed: true }
+  }
+  if (token) {
+    return { accessToken: token, accountId: creds.accountId, refreshed: false }
+  }
+  throw new CredentialsError('cline2dsh: no usable Cline token; open the Cline desktop app and log in.', 'CLINE_NOT_LOGGED_IN')
 }
