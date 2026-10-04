@@ -16,8 +16,14 @@ export interface Cline2dshConfig {
   credentialsPath?: string
   /** Model catalog refresh interval in seconds. */
   refreshSeconds?: number
-  /** Only expose models whose id carries the `:free` suffix (default true). */
+  /** Only expose free models (default true). */
   freeOnly?: boolean
+  /**
+   * Also expose the Cline Pass bucket (recommended-models endpoint). These
+   * need a Cline Pass subscription — without one every request 403s with
+   * ENTITLEMENT_ERROR, so this defaults to false.
+   */
+  includeClinePass?: boolean
   /** Watchdog: ms to wait for the first stream event. */
   firstEventMs?: number
   /** Watchdog: ms of body silence tolerated mid-stream. */
@@ -30,10 +36,11 @@ export const defaults = {
   credentialsPath: '',
   refreshSeconds: 300,
   freeOnly: true,
+  includeClinePass: false,
 }
 
 export type ResolvedConfig = Required<
-  Pick<Cline2dshConfig, 'providerId' | 'baseURL' | 'credentialsPath' | 'refreshSeconds' | 'freeOnly'>
+  Pick<Cline2dshConfig, 'providerId' | 'baseURL' | 'credentialsPath' | 'refreshSeconds' | 'freeOnly' | 'includeClinePass'>
 > & Pick<Cline2dshConfig, 'firstEventMs' | 'bodyIdleMs'>
 
 export function resolveConfig(config: Cline2dshConfig = {}): ResolvedConfig {
@@ -51,6 +58,7 @@ export const Config = Schema.object({
   credentialsPath: Schema.string().default(defaults.credentialsPath),
   refreshSeconds: Schema.number().step(1).min(30).default(defaults.refreshSeconds),
   freeOnly: Schema.boolean().default(defaults.freeOnly),
+  includeClinePass: Schema.boolean().default(defaults.includeClinePass),
   firstEventMs: Schema.number().step(1).min(1_000).max(600_000),
   bodyIdleMs: Schema.number().step(1).min(1_000).max(600_000),
 })

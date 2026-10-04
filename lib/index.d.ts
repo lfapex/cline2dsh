@@ -18,14 +18,20 @@ interface Cline2dshConfig {
   credentialsPath?: string;
   /** Model catalog refresh interval in seconds. */
   refreshSeconds?: number;
-  /** Only expose models whose id carries the `:free` suffix (default true). */
+  /** Only expose free models (default true). */
   freeOnly?: boolean;
+  /**
+   * Also expose the Cline Pass bucket (recommended-models endpoint). These
+   * need a Cline Pass subscription — without one every request 403s with
+   * ENTITLEMENT_ERROR, so this defaults to false.
+   */
+  includeClinePass?: boolean;
   /** Watchdog: ms to wait for the first stream event. */
   firstEventMs?: number;
   /** Watchdog: ms of body silence tolerated mid-stream. */
   bodyIdleMs?: number;
 }
-type ResolvedConfig = Required<Pick<Cline2dshConfig, 'providerId' | 'baseURL' | 'credentialsPath' | 'refreshSeconds' | 'freeOnly'>> & Pick<Cline2dshConfig, 'firstEventMs' | 'bodyIdleMs'>;
+type ResolvedConfig = Required<Pick<Cline2dshConfig, 'providerId' | 'baseURL' | 'credentialsPath' | 'refreshSeconds' | 'freeOnly' | 'includeClinePass'>> & Pick<Cline2dshConfig, 'firstEventMs' | 'bodyIdleMs'>;
 declare function resolveConfig(config?: Cline2dshConfig): ResolvedConfig;
 /**
  * The plugin's `Config` — the DSH settings contract. Everything here is
@@ -38,6 +44,7 @@ declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
   credentialsPath: Schema<string, string, "defined">;
   refreshSeconds: Schema<number, number, "defined">;
   freeOnly: Schema<boolean, boolean, "defined">;
+  includeClinePass: Schema<boolean, boolean, "defined">;
   firstEventMs: Schema<number, number, "plain">;
   bodyIdleMs: Schema<number, number, "plain">;
 }>>, Schemastery.ObjectT<NoInfer<{
@@ -46,6 +53,7 @@ declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
   credentialsPath: Schema<string, string, "defined">;
   refreshSeconds: Schema<number, number, "defined">;
   freeOnly: Schema<boolean, boolean, "defined">;
+  includeClinePass: Schema<boolean, boolean, "defined">;
   firstEventMs: Schema<number, number, "plain">;
   bodyIdleMs: Schema<number, number, "plain">;
 }>>, "plain">;
@@ -55,6 +63,9 @@ interface CatalogSnapshot {
   status: 'live' | 'cache' | 'static' | 'pending';
   total: number;
   exposed: number;
+  freeBucket: number;
+  clinePass: number;
+  openrouterFree: number;
   fetchedAt?: string;
 }
 declare function defaultCachePath(dataDir: string): string;
@@ -67,10 +78,12 @@ declare class ModelCatalog {
     cachePath: string;
     refreshSeconds: number;
     freeOnly: boolean;
+    includeClinePass?: boolean;
     fetchImpl?: typeof fetch;
     onRefresh?: (snapshot: CatalogSnapshot, lastError: string) => void;
   });
   list(): string[];
+  display(model: string): string;
   snapshot(): CatalogSnapshot;
   limits(model: string): {
     contextWindow?: number;

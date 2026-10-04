@@ -7,19 +7,28 @@ import { clineRequestHeaders, readClineCredentialsCached } from './credentials.t
 /**
  * Free-model catalog for the Cline lane.
  *
- * Three tiers, mirroring opencode2dsh's fallback chain:
- *   1. live `GET {baseURL}/models` filtered to the free lane (`:free` ids),
- *      enriched with OpenRouter's public metadata (context window, image
- *      input) — OpenRouter is unreachable from some networks, so this
- *      enrichment is best-effort and never blocks the model list;
- *   2. a disk cache valid for 7 days (offline / upstream outage);
- *   3. a compiled-in static roster (verified 2026-10-04).
+ * Cline's "free" is TWO disjoint families (verified 2026-10-04):
+ *   1. Cline's own promo free fleet, served by
+ *      `GET {baseURL}/ai/cline/recommended-models` in the `free` bucket —
+ *      ids carry the `cline-free/` routing prefix (plus OpenRouter-style
+ *      sponsored ids like `stealth/space-bunny-alpha`). Requests route on
+ *      that prefix and the backend gates them on client identity headers,
+ *      not on the token alone. The `clinePass` bucket of the same endpoint
+ *      requires a Cline Pass subscription (403 ENTITLEMENT_ERROR without
+ *      one), so it is opt-in (`includeClinePass`).
+ *   2. OpenRouter-routed free models: `/models` rows whose id carries the
+ *      `:free` suffix.
+ *
+ * Fallback chain: live (recommended-models ∪ :free rows, OpenRouter metadata
+ * enrichment best-effort) → 7-day disk cache → compiled-in static roster.
  */
 
 export const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 
 export interface CatalogEntry {
   id: string
+  /** Human display name from the Cline free bucket when available. */
+  name?: string
   contextWindow?: number
   maxOutput?: number
   input?: string[]
@@ -29,6 +38,9 @@ export interface CatalogSnapshot {
   status: 'live' | 'cache' | 'static' | 'pending'
   total: number
   exposed: number
+  freeBucket: number
+  clinePass: number
+  openrouterFree: number
   fetchedAt?: string
 }
 
@@ -39,29 +51,45 @@ interface CacheFile {
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-/** Verified free roster (GET /models `:free` intersection, 2026-10-04). */
-export const STATIC_FREE_MODELS: string[] = [
-  'apodex/apodex-1.1-mini:free',
-  'inclusionai/ling-3.0-flash-sante:free',
-  'qwen/qwen3.8-27b:free',
-  'dots-studio/dots-3-note-preview:free',
-  'liquid/lfm-2.5-2.6b:free',
-  'nvidia/nemotron-3.5-lightning:free',
-  'thinkingmachines/inkling-small:free',
-  'poolside/laguna-s-2.1:free',
-  'thinkingmachines/inkling:free',
-  'poolside/laguna-xs-2.1:free',
-  'cohere/north-mini-code:free',
-  'nvidia/nemotron-3.5-content-safety:free',
-  'nvidia/nemotron-3-ultra-550b-a55b:free',
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-  'google/gemma-4-26b-a4b-it:free',
-  'google/gemma-4-31b-it:free',
-  'nvidia/nemotron-3-super-120b-a12b:free',
+/** Verified free roster (free bucket ∪ /models `:free`, 2026-10-04). */
+export const STATIC_FREE_MODELS: CatalogEntry[] = [
+  { id: 'cline-free/deepseek-v4.1-flash', name: 'Deepseek-v4.1-Flash' },
+  { id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha' },
+  { id: 'cline-free/mimo-v2.6-flash', name: 'Mimo V2.6 Flash' },
+  { id: 'cline-free/muse-spark-1.3-contributor', name: 'Muse Spark 1.3 Contributor' },
+  { id: 'apodex/apodex-1.1-mini:free' },
+  { id: 'inclusionai/ling-3.0-flash-sante:free' },
+  { id: 'qwen/qwen3.8-27b:free' },
+  { id: 'dots-studio/dots-3-note-preview:free' },
+  { id: 'liquid/lfm-2.5-2.6b:free' },
+  { id: 'nvidia/nemotron-3.5-lightning:free' },
+  { id: 'thinkingmachines/inkling-small:free' },
+  { id: 'poolside/laguna-s-2.1:free' },
+  { id: 'thinkingmachines/inkling:free' },
+  { id: 'poolside/laguna-xs-2.1:free' },
+  { id: 'cohere/north-mini-code:free' },
+  { id: 'nvidia/nemotron-3.5-content-safety:free' },
+  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free' },
+  { id: 'google/gemma-4-26b-a4b-it:free' },
+  { id: 'google/gemma-4-31b-it:free' },
+  { id: 'nvidia/nemotron-3-super-120b-a12b:free' },
 ]
 
 export function isFreeModel(id: string): boolean {
   return id.endsWith(':free')
+}
+
+/** "cline-pass/glm-5.3" -> "Glm 5.3"; bucket names are often raw ids. */
+export function prettifyBucketName(raw: string | undefined, id: string): string {
+  if (typeof raw === 'string' && raw.length > 0 && !raw.includes('/')) return raw
+  const short = (raw ?? id).split('/').at(-1) ?? id
+  return short
+    .replace(/[:].*$/, '')
+    .split('-')
+    .filter((part) => part.length > 0)
+    .map((part) => (part.length <= 3 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(' ')
 }
 
 export function defaultCachePath(dataDir: string): string {
@@ -72,18 +100,26 @@ export function defaultDataDir(): string {
   return join(homedir(), '.cline2dsh')
 }
 
+interface BucketRow {
+  id?: string
+  name?: string
+  description?: string
+}
+
 export class ModelCatalog {
   readonly #baseURL: string
   readonly #credentialsPath: string
   readonly #cachePath: string
   readonly #refreshSeconds: number
   readonly #freeOnly: boolean
+  readonly #includeClinePass: boolean
   readonly #fetchImpl: typeof fetch
   readonly #onRefresh?: (snapshot: CatalogSnapshot, lastError: string) => void
 
   #entries: Map<string, CatalogEntry> = new Map()
   #status: CatalogSnapshot['status'] = 'pending'
   #fetchedAt?: string
+  #counts = { freeBucket: 0, clinePass: 0, openrouterFree: 0 }
   #timer: NodeJS.Timeout | undefined
   #refreshing: Promise<void> | undefined
 
@@ -93,6 +129,7 @@ export class ModelCatalog {
     cachePath: string
     refreshSeconds: number
     freeOnly: boolean
+    includeClinePass?: boolean
     fetchImpl?: typeof fetch
     onRefresh?: (snapshot: CatalogSnapshot, lastError: string) => void
   }) {
@@ -101,13 +138,18 @@ export class ModelCatalog {
     this.#cachePath = options.cachePath
     this.#refreshSeconds = options.refreshSeconds
     this.#freeOnly = options.freeOnly
+    this.#includeClinePass = options.includeClinePass === true
     this.#fetchImpl = options.fetchImpl ?? fetch
     this.#onRefresh = options.onRefresh
   }
 
   list(): string[] {
     if (this.#entries.size > 0) return [...this.#entries.keys()]
-    return this.#freeOnly ? [...STATIC_FREE_MODELS] : [...STATIC_FREE_MODELS]
+    return STATIC_FREE_MODELS.map((entry) => entry.id)
+  }
+
+  display(model: string): string {
+    return this.#entries.get(model)?.name ?? model
   }
 
   snapshot(): CatalogSnapshot {
@@ -115,6 +157,7 @@ export class ModelCatalog {
       status: this.#status,
       total: this.#entries.size,
       exposed: this.#entries.size,
+      ...this.#counts,
       ...(this.#fetchedAt ? { fetchedAt: this.#fetchedAt } : {}),
     }
   }
@@ -172,25 +215,59 @@ export class ModelCatalog {
 
   async #refreshOnce(): Promise<void> {
     try {
-      const entries = await this.#fetchLive()
-      if (entries.length > 0) {
-        this.#ingest(entries, 'live', new Date().toISOString())
-        await this.#writeCache(entries).catch(() => {})
-        this.#announce('')
-        return
+      const [buckets, orFree] = await Promise.all([this.#fetchFreeBuckets(), this.#fetchOpenRouterFree()])
+      const entries = new Map<string, CatalogEntry>()
+      for (const entry of buckets.entries()) entries.set(entry[0], entry[1])
+      for (const entry of orFree) {
+        if (!entries.has(entry.id)) entries.set(entry.id, entry)
       }
-      throw new Error('model list came back empty')
+      if (entries.size === 0) throw new Error('both free sources came back empty')
+      this.#ingest([...entries.values()], 'live', new Date().toISOString())
+      await this.#writeCache([...entries.values()]).catch(() => {})
+      this.#announce('')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (this.#entries.size === 0) {
-        // tier 3: compiled-in roster so the picker is never empty
-        this.#ingest(STATIC_FREE_MODELS.map((id) => ({ id })), 'static')
+        this.#ingest(STATIC_FREE_MODELS, 'static')
       }
       this.#announce(message)
     }
   }
 
-  async #fetchLive(): Promise<CatalogEntry[]> {
+  /** Cline's own free fleet (the `free` bucket; `clinePass` is opt-in). */
+  async #fetchFreeBuckets(): Promise<Map<string, CatalogEntry>> {
+    const creds = await readClineCredentialsCached(this.#credentialsPath || undefined)
+    const url = `${this.#baseURL}/ai/cline/recommended-models`
+    const response = await this.#fetchImpl(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${creds.accessToken}`,
+        ...clineRequestHeaders(creds),
+      },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!response.ok) throw new Error(`GET ${url} -> ${response.status}`)
+    const body = (await response.json()) as { free?: BucketRow[]; clinePass?: BucketRow[] }
+    const entries = new Map<string, CatalogEntry>()
+    const take = (rows: BucketRow[] | undefined, tag: 'free' | 'clinePass'): number => {
+      let n = 0
+      for (const row of rows ?? []) {
+        if (typeof row?.id !== 'string' || row.id.length === 0) continue
+        n += 1
+        if (tag === 'clinePass' && !this.#includeClinePass) continue
+        if (entries.has(row.id)) continue
+        entries.set(row.id, { id: row.id, name: prettifyBucketName(row.name, row.id) })
+      }
+      return n
+    }
+    this.#counts.freeBucket = take(body.free, 'free')
+    this.#counts.clinePass = take(body.clinePass, 'clinePass')
+    return entries
+  }
+
+  /** OpenRouter-routed free models: `:free` suffix rows of GET /models. */
+  async #fetchOpenRouterFree(): Promise<CatalogEntry[]> {
     const creds = await readClineCredentialsCached(this.#credentialsPath || undefined)
     const url = `${this.#baseURL}/models`
     const response = await this.#fetchImpl(url, {
@@ -201,9 +278,7 @@ export class ModelCatalog {
       },
       signal: AbortSignal.timeout(15_000),
     })
-    if (!response.ok) {
-      throw new Error(`GET ${url} -> ${response.status}`)
-    }
+    if (!response.ok) throw new Error(`GET ${url} -> ${response.status}`)
     const body = (await response.json()) as { data?: Array<{ id?: string }>; models?: Array<{ id?: string }> }
     const rows = body.data ?? body.models ?? []
     const ids: string[] = []
@@ -212,15 +287,16 @@ export class ModelCatalog {
       if (this.#freeOnly && !isFreeModel(row.id)) continue
       ids.push(row.id)
     }
+    this.#counts.openrouterFree = ids.length
     if (ids.length === 0) return []
     const enriched = await this.#enrich(ids).catch(() => undefined)
     return ids.map((id) => enriched?.get(id) ?? { id })
   }
 
   /**
-   * Best-effort OpenRouter metadata: context_length, max output, and image
-   * input. Cline ids are OpenRouter ids verbatim, so the join is exact; any
-   * failure (offline, blocked, shape change) only costs the enrichment.
+   * Best-effort OpenRouter metadata: display name, context window, max
+   * output, image input. Cline's OpenRouter ids are verbatim OpenRouter ids,
+   * so the join is exact; any failure only costs the enrichment.
    */
   async #enrich(ids: string[]): Promise<Map<string, CatalogEntry>> {
     const wanted = new Set(ids)
@@ -232,6 +308,7 @@ export class ModelCatalog {
     const body = (await response.json()) as {
       data?: Array<{
         id?: string
+        name?: string
         context_length?: number
         top_provider?: { max_completion_tokens?: number | null }
         architecture?: { input_modalities?: string[] }
@@ -241,6 +318,7 @@ export class ModelCatalog {
     for (const row of body.data ?? []) {
       if (typeof row?.id !== 'string' || !wanted.has(row.id)) continue
       const entry: CatalogEntry = { id: row.id }
+      if (typeof row.name === 'string' && row.name.length > 0) entry.name = row.name
       if (typeof row.context_length === 'number' && row.context_length > 0) entry.contextWindow = row.context_length
       if (typeof row.top_provider?.max_completion_tokens === 'number' && row.top_provider.max_completion_tokens > 0) {
         entry.maxOutput = row.top_provider.max_completion_tokens

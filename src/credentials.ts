@@ -93,12 +93,29 @@ export async function readClineCredentials(path: string = defaultCredentialsPath
   return { accessToken, accountId, expiresAt }
 }
 
-/** Headers the Cline desktop client itself sends (attribution is OpenRouter-style). */
+/**
+ * Headers the Cline desktop client itself sends. Two layers matter:
+ *  - attribution (HTTP-Referer / X-Title) and the account binding
+ *    (clineUserId), matching the desktop client;
+ *  - client identity (X-CLIENT-TYPE / X-CLIENT-VERSION / X-PLATFORM) — the
+ *    `cline-free/*` routing prefix is gated on these ("only available via
+ *    Cline product surfaces", live-verified 2026-10-04: plain Bearer alone
+ *    gets 403, the full identity set gets 200).
+ */
+const CLINE_CLIENT_TYPE = process.env.CLINE_CLIENT_TYPE?.trim() || 'cline-sdk'
+const CLINE_CLIENT_VERSION = process.env.CLINE_CLIENT_VERSION?.trim() || '4.1.22'
+
 export function clineRequestHeaders(creds: ClineCredentials): Record<string, string> {
   return {
     clineUserId: creds.accountId,
     'HTTP-Referer': 'https://cline.bot',
     'X-Title': 'Cline',
+    'X-IS-MULTIROOT': 'false',
+    'X-CLIENT-TYPE': CLINE_CLIENT_TYPE,
+    'X-CLIENT-VERSION': CLINE_CLIENT_VERSION,
+    'X-PLATFORM': CLINE_CLIENT_TYPE,
+    'X-PLATFORM-VERSION': CLINE_CLIENT_VERSION,
+    'User-Agent': `Cline/${CLINE_CLIENT_VERSION}`,
   }
 }
 

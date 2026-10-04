@@ -1,5 +1,5 @@
-// Live e2e smoke test: credentials -> catalog -> one tiny free-model completion.
-// Run: node test/e2e.mjs
+// Live e2e smoke test: credentials -> catalog (free bucket ∪ :free) -> one
+// tiny cline-free completion. Run: node test/e2e.mjs
 import { ClineAdapter, ModelCatalog, defaultCachePath, defaultDataDir } from '../lib/index.js'
 import { readClineCredentialsCached } from '../lib/index.js'
 
@@ -15,13 +15,16 @@ const catalog = new ModelCatalog({
   cachePath: defaultCachePath(defaultDataDir()),
   refreshSeconds: 300,
   freeOnly: true,
+  includeClinePass: false,
 })
 await catalog.refresh()
 const snap = catalog.snapshot()
-console.log('catalog:', JSON.stringify(snap), 'first =', catalog.list()[0])
+console.log('catalog:', JSON.stringify(snap))
+console.log('models:', catalog.list().join(', '))
 
 const adapter = new ClineAdapter(catalog, { baseURL, credentialsPath })
-const model = catalog.list().find((id) => id.startsWith('qwen/')) ?? catalog.list()[0]
+const wanted = process.env.E2E_MODEL ?? 'cline-free/mimo-v2.6-flash'
+const model = catalog.list().includes(wanted) ? wanted : catalog.list()[0]
 console.log('testing model:', model)
 
 let text = ''

@@ -57,9 +57,10 @@ export function apply(ctx: PluginContext, config: Cline2dshConfig = {}): void {
     cachePath: defaultCachePath(dataDir),
     refreshSeconds: cfg.refreshSeconds,
     freeOnly: cfg.freeOnly,
+    includeClinePass: cfg.includeClinePass,
     onRefresh: (status, lastError) => {
       if (lastError) logger.warn(`cline2dsh: catalog refresh issue (${status.status}): ${lastError}`)
-      else logger.info(`cline2dsh: catalog ${status.status} (${status.exposed} free models)`)
+      else logger.info(`cline2dsh: catalog ${status.status} (${status.exposed} free models: free-bucket ${status.freeBucket}, cline-pass ${status.clinePass}, :free ${status.openrouterFree})`)
     },
   })
   const adapter = new ClineAdapter(catalog, {

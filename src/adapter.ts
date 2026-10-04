@@ -147,7 +147,7 @@ export class ClineAdapter {
     for (const id of this.#catalog.list()) {
       if (seen.has(id)) continue
       seen.add(id)
-      models.push({ provider, id, name: id, inputModalities: inputModalitiesFor(this.#entryFor(id)) })
+      models.push({ provider, id, name: this.#catalog.display(id), inputModalities: inputModalitiesFor(this.#entryFor(id)) })
     }
     return models
   }
@@ -164,7 +164,7 @@ export class ClineAdapter {
     return {
       provider,
       id: model,
-      name: model,
+      name: this.#catalog.display(model),
       inputModalities: inputModalitiesFor(entry),
       context: { contextWindow: contextWindowFor(entry) },
       defaultMaxTokens: maxTokensFor(entry),
